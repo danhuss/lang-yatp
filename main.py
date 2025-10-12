@@ -26,8 +26,9 @@ def book_flight(from_airport: str, to_airport: str):
     return f"Successfully booked a flight from {from_airport} to {to_airport}."
 
 def main():
+    user_input = None
     load_dotenv()
-    model = ChatOllama(model="llama3.2")
+    model = ChatOllama(model="llama3.1:8b", request_timeout=300)
 
     activity_agent = create_react_agent(
         model=model,
@@ -53,18 +54,38 @@ def main():
     supervisor_agent = create_supervisor(
         agents=[activity_agent, hotel_agent, flight_agent],
         model=model,
-        prompt="You manage a small travel agency with an activity search agent, flight booking agent, and hotel booking agent. Assign work to them."
+        prompt="""You manage a small travel agency. Your goal is to help users decide on and plan their trips. 
+You have three agents assistants: an activity search agent, flight booking agent, and hotel booking agent. Start by 
+answering any questions the user has about travel or their destination. Then, if the user wants to book a flight or hotel,
+delegate to the appropriate agent. Make sure you have allthe information needed before booking flights and hotels like the dates, location, etc. 
+Always confirm with the user before booking anything."""
     ).compile()
 
-    png_data = supervisor_agent.get_graph().draw_mermaid_png()
-    with open("graph.png", "wb") as f:
-        f.write(png_data)
+    # png_data = supervisor_agent.get_graph().draw_mermaid_png()
+    # with open("graph.png", "wb") as f:
+    #     f.write(png_data)
 
-    result = supervisor_agent.invoke(
-        {"messages": [{"role": "user", "content": "I want to visit a Miami FL, what should I do? Then go ahead and book a flight from LA to Miami and a stay at Motel 6."}]}
-    )
+    if user_input is None:
+        print("Please enter your travel request:")
+        user_input = input("> ")
 
-    print(result)
+    if not user_input.strip():
+        print("No input provided. Exiting.")
+        sys.exit(0)
+
+    for event in supervisor_agent.stream({"messages": [{"role": "user", "content": user_input}]}):
+        for value in event.values():
+            if "messages" in value and value["messages"]:
+                last_message = value["messages"][-1]
+                if hasattr(last_message, 'content'):
+                    print("Assistant:", last_message.content)
+
+#     result = supervisor_agent.invoke(
+#         {"messages": [{"role": "user", "content": user_input}]}
+# #        {"messages": [{"role": "user", "content": "I want to visit a Miami FL, what should I do? Then go ahead and book a flight from LA to Miami and a stay at Motel 6."}]}
+#     )
+
+    # print(result)
     # print(result.get('messages')[-1].content)
 
 if __name__ == "__main__":
