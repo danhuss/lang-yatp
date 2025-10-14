@@ -6,8 +6,8 @@
 #     messages: Annotated[list, add_messages]
 import sys
 import os
+import time
 from dotenv import load_dotenv
-
 from typing import Optional
 from langgraph.prebuilt import create_react_agent
 from langgraph_supervisor import create_supervisor
@@ -25,10 +25,31 @@ def book_flight(from_airport: str, to_airport: str):
     """Book a flight"""
     return f"Successfully booked a flight from {from_airport} to {to_airport}."
 
+def create_model_with_retry(model_name: str = "llama3.1:8b", max_retries: int = 3):
+    """Create model with retry logic"""
+    for attempt in range(max_retries):
+        try:
+            model = ChatOllama(
+                model=model_name,
+                temperature=0.7,
+                request_timeout=240.0  # Increase timeout for reliability
+            )
+            # Test the model with a simple call
+            model.invoke("Hi")
+            print(f"✓ Model '{model_name}' loaded successfully")
+            return model
+        except Exception as e:
+            print(f"⚠ Attempt {attempt + 1}/{max_retries} failed to load model: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+            else:
+                raise Exception(f"Failed to load model after {max_retries} attempts. Is Ollama running?")
+
+
 def main():
     user_input = None
     load_dotenv()
-    model = ChatOllama(model="llama3.1:8b", request_timeout=300)
+    model = create_model_with_retry(model_name="llama3.2")
 
     activity_agent = create_react_agent(
         model=model,
@@ -73,12 +94,32 @@ Always confirm with the user before booking anything."""
         print("No input provided. Exiting.")
         sys.exit(0)
 
-    for event in supervisor_agent.stream({"messages": [{"role": "user", "content": user_input}]}):
-        for value in event.values():
-            if "messages" in value and value["messages"]:
-                last_message = value["messages"][-1]
+    try:
+        for event in supervisor_agent.stream(
+            {"messages": [{"role": "user", "content": user_input}]},
+            {"recursion_limit": 50}
+        ):
+            for value in event.values():
+                if value is None:
+                    continue
+                if "messages" not in value:
+                    continue
+                messages = value.get("messages") 
+                if not messages or len(messages) == 0:
+                    continue
+                last_message = messages[-1]
                 if hasattr(last_message, 'content'):
-                    print("Assistant:", last_message.content)
+                    content = last_message.content
+                    if content is not None:
+                        print("Assistant: ", content)
+                elif isinstance(last_message, dict) and 'content' in last_message:
+                    content = last_message['content']
+                    if content is not None:
+                        print("Assistant: ", str(content))
+    except KeyboardInterrupt:
+        print("\nProcess interrupted by user. Exiting.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
 
 #     result = supervisor_agent.invoke(
 #         {"messages": [{"role": "user", "content": user_input}]}
