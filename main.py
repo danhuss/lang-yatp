@@ -4,8 +4,6 @@
 
 # class YatpState(TypedDict):
 #     messages: Annotated[list, add_messages]
-import sys
-import os
 import time
 from dotenv import load_dotenv
 from typing import Optional
@@ -49,7 +47,7 @@ def create_model_with_retry(model_name: str = "llama3.1:8b", max_retries: int = 
 def main():
     user_input = None
     load_dotenv()
-    model = create_model_with_retry(model_name="llama3.2")
+    model = create_model_with_retry(model_name="gpt-oss")
 
     activity_agent = create_react_agent(
         model=model,
@@ -75,51 +73,70 @@ def main():
     supervisor_agent = create_supervisor(
         agents=[activity_agent, hotel_agent, flight_agent],
         model=model,
+        output_mode="full_history",
         prompt="""You manage a small travel agency. Your goal is to help users decide on and plan their trips. 
-You have three agents assistants: an activity search agent, flight booking agent, and hotel booking agent. Start by 
-answering any questions the user has about travel or their destination. Then, if the user wants to book a flight or hotel,
-delegate to the appropriate agent. Make sure you have allthe information needed before booking flights and hotels like the dates, location, etc. 
-Always confirm with the user before booking anything."""
+You have three agents assistants: for general questions use activity_agent, for booking flights use flight_agent, 
+and for booking hotels use hotel_agent. Start by answering any questions the user has about travel or their 
+destination. Then, if the user wants to book a flight or hotel, delegate to the appropriate agent. Make sure 
+you have all the information needed before booking flights and hotels like the dates, location, etc. Always 
+confirm with the user before booking anything."""
     ).compile()
 
     # png_data = supervisor_agent.get_graph().draw_mermaid_png()
     # with open("graph.png", "wb") as f:
     #     f.write(png_data)
 
-    if user_input is None:
-        print("Please enter your travel request:")
-        user_input = input("> ")
+    print("Welcome to the Travel Agency! Type 'quit' or 'exit' to end.")
+    conversation_state = {"messages": []}
 
-    if not user_input.strip():
-        print("No input provided. Exiting.")
-        sys.exit(0)
+    while True:
+        user_input = input("> ").strip()
 
-    try:
-        for event in supervisor_agent.stream(
-            {"messages": [{"role": "user", "content": user_input}]},
-            {"recursion_limit": 50}
-        ):
-            for value in event.values():
-                if value is None:
-                    continue
-                if "messages" not in value:
-                    continue
-                messages = value.get("messages") 
-                if not messages or len(messages) == 0:
-                    continue
-                last_message = messages[-1]
-                if hasattr(last_message, 'content'):
-                    content = last_message.content
-                    if content is not None:
-                        print("Assistant: ", content)
-                elif isinstance(last_message, dict) and 'content' in last_message:
-                    content = last_message['content']
-                    if content is not None:
-                        print("Assistant: ", str(content))
-    except KeyboardInterrupt:
-        print("\nProcess interrupted by user. Exiting.")
-    except Exception as e:
-        print(f"An error occurred: {e}")
+        if not user_input:
+            continue
+        if user_input.lower() in ['exit', 'quit', 'q', 'bye', 'goodbye']:
+            print("Goodbye!")
+            break
+        print("Processing your request... (press Ctrl+C to cancel)")
+        conversation_state["messages"].append({"role": "user", "content": user_input})
+
+        try:
+            for event in supervisor_agent.stream(
+                conversation_state,
+                {"recursion_limit": 50}
+            ):
+                # print(event)
+                # print("-----")
+                for value in event.values():
+                    if value is None:
+                        continue
+                    if "messages" not in value:
+                        continue
+                    messages = value.get("messages") 
+                    if not messages or len(messages) == 0:
+                        continue
+                    conversation_state["messages"] = messages
+                    last_message = messages[-1]
+                    agent_name = getattr(last_message, 'name', None) or 'Assistant'
+                    content = None
+                    if hasattr(last_message, 'content'):
+                        content = last_message.content
+                    elif isinstance(last_message, dict) and 'content' in last_message:
+                        content = last_message['content']
+                    
+                    if content and isinstance(content, str) and content.strip():
+                        print(f"\n[{agent_name}]: {content}")
+                    
+                    # Debug: Show tool calls if present (optional)
+                    if hasattr(last_message, 'tool_calls') and last_message.tool_calls:
+                        for tool_call in last_message.tool_calls:
+                            print(f"  → Calling tool: {tool_call.get('name', 'unknown')}")
+        except KeyboardInterrupt:
+            print("\nProcess interrupted by user. Exiting.")
+            break
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            break
 
 #     result = supervisor_agent.invoke(
 #         {"messages": [{"role": "user", "content": user_input}]}
